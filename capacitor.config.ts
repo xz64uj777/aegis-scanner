@@ -7,6 +7,11 @@ const config: CapacitorConfig = {
   android: {
     allowMixedContent: true,
   },
+  server: {
+    androidScheme: "http",
+    hostname: "aegis.app",
+    cleartext: true,
+  },
 };
 
 export default config;
