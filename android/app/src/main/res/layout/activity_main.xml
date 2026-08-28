@@ -9,9 +9,16 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="20dp">
+        <Button
+            android:id="@+id/btnClose"
+            style="@style/AegisButton.Outline"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Close app" />
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
             android:letterSpacing="0.08"
             android:text="AEGIS · NATIVE"
             android:textColor="@color/muted"
@@ -29,7 +36,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Build 3 — native screen. Grant All files, then scan shared storage."
+            android:text="Build 4 — Close app is always at the top. Swipe back also exits."
             android:textColor="@color/muted"
             android:textSize="14sp" />
         <LinearLayout
@@ -52,7 +59,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Android will open the All files screen. Turn Aegis on, then return here."
+                android:text="Android will open the All files screen. Turn Aegis on, then swipe back."
                 android:textColor="@color/muted"
                 android:textSize="14sp" />
             <Button
@@ -77,6 +84,14 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:text="Deep scan"
+                android:visibility="gone" />
+            <Button
+                android:id="@+id/btnStop"
+                style="@style/AegisButton.Outline"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Stop scan"
                 android:visibility="gone" />
             <ProgressBar
                 android:id="@+id/bar"
@@ -118,6 +133,13 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />
+            <Button
+                android:id="@+id/btnClear"
+                style="@style/AegisButton.Outline"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Clear results" />
         </LinearLayout>
     </LinearLayout>
 </ScrollView>
