@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="colorPrimary">#4a9eff</color>
-    <color name="colorPrimaryDark">#0b0d11</color>
-    <color name="colorAccent">#4a9eff</color>
-    <color name="ic_launcher_background">#0b0d11</color>
+    <color name="colorPrimary">#4A9EFF</color>
+    <color name="colorPrimaryDark">#0B0D11</color>
+    <color name="colorAccent">#4A9EFF</color>
+    <color name="surface">#12151B</color>
+    <color name="fg">#E8EAED</color>
+    <color name="muted">#8B919A</color>
+    <color name="danger">#E85D5D</color>
+    <color name="ok">#3ECF8E</color>
 </resources>

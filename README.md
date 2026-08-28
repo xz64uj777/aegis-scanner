@@ -1,24 +1,23 @@
 # Aegis
 
-On-device file scanner for Android. Install the APK, grant **All files access**, then scan shared storage. Nothing is uploaded.
+On-device scanner for Android. **Do not install v1.0.8** — that APK is a WebView and shows `https://localhost` / ERR_CONNECTION_REFUSED.
 
-## Install on a Galaxy phone
+Use the **newest** Release after **v1.0.8**. The screen must say **AEGIS · NATIVE** and **This phone**. If you still see a webpage error, you installed the old file.
 
-1. Open **[Releases](https://github.com/xz64uj777/aegis-scanner/releases)** on the phone.
-2. Download **Aegis.apk** (the latest `app-debug.apk`).
-3. Open **Files → Downloads → Aegis.apk**.
-4. If Samsung blocks it: **Settings → Security and privacy → Install unknown apps** → allow **Files** (or Chrome).
-5. Open **Aegis → Allow all files**. On the system screen, turn Aegis **on**. Go back.
-6. Tap **Scan allowed storage**.
+## Install on a Galaxy S24
 
-GitHub Actions builds a new APK on every push to `main`.
+1. Uninstall the old Aegis (Settings → Apps → Aegis → Uninstall).
+2. Delete `app-debug.apk` from Downloads.
+3. Open [Releases](https://github.com/xz64uj777/aegis-scanner/releases) — pick the **latest** tag, not v1.0.8.
+4. Download `app-debug.apk`.
+5. Files → Downloads → install. Allow unknown apps if Samsung asks.
+6. Open Aegis → Allow all files → turn the switch on → Scan allowed storage.
 
-## What All files access actually sees
+## What it scans
 
-- Yes: Downloads, Documents, DCIM, Movies, Telegram, WhatsApp media, and the rest of shared storage (`/storage/emulated/0`).
-- No: other apps’ private data (`/data/data`), `/system`, or boot/firmware.
+Shared storage only: Downloads, Documents, DCIM, Telegram, WhatsApp media.
 
-That last group is **Linux root**. Installing this APK does **not** root the phone. Rooting an S24 trips Knox and is a separate, risky choice.
+Not scanned without root: other apps’ private data (`/data`), `/system`, boot.
 
 ## License
 
