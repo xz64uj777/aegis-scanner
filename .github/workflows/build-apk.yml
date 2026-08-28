@@ -28,16 +28,13 @@ jobs:
         with:
           gradle-version: "8.14.3"
 
-      - name: Install Capacitor
-        run: |
-          npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/app
-
-      - name: Sync Android project
-        run: npx cap sync android
+      - name: Install Capacitor Android libraries
+        run: npm install @capacitor/android @capacitor/app @capacitor/core
 
       - name: Build debug APK
         run: |
-          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+          echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
           cd android
           gradle assembleDebug --no-daemon
 
