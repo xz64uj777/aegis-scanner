@@ -3,6 +3,7 @@
     <color name="colorPrimary">#4A9EFF</color>
     <color name="colorPrimaryDark">#0B0D11</color>
     <color name="colorAccent">#4A9EFF</color>
+    <color name="ic_launcher_background">#0B0D11</color>
     <color name="surface">#12151B</color>
     <color name="fg">#E8EAED</color>
     <color name="muted">#8B919A</color>
