@@ -13,6 +13,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.io.File;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -35,10 +37,14 @@ public class MainActivity extends AppCompatActivity {
     private Button btnAllow;
     private Button btnScan;
     private Button btnDeep;
+    private Button btnStop;
+    private Button btnClose;
+    private Button btnClear;
     private ProgressBar bar;
     private LinearLayout findings;
     private LinearLayout findingsCard;
     private boolean scanning = false;
+    private final AtomicBoolean cancel = new AtomicBoolean(false);
 
     private static final String[] QUICK_EXT = {
         "apk", "xapk", "apks", "dex", "exe", "dll", "js", "vbs", "ps1", "bat",
@@ -57,12 +63,32 @@ public class MainActivity extends AppCompatActivity {
         btnAllow = findViewById(R.id.btnAllow);
         btnScan = findViewById(R.id.btnScan);
         btnDeep = findViewById(R.id.btnDeep);
+        btnStop = findViewById(R.id.btnStop);
+        btnClose = findViewById(R.id.btnClose);
+        btnClear = findViewById(R.id.btnClear);
         bar = findViewById(R.id.bar);
         findings = findViewById(R.id.findings);
         findingsCard = findViewById(R.id.findingsCard);
         btnAllow.setOnClickListener(v -> requestAllFiles());
         btnScan.setOnClickListener(v -> startScan(false));
         btnDeep.setOnClickListener(v -> startScan(true));
+        btnStop.setOnClickListener(v -> cancel.set(true));
+        btnClose.setOnClickListener(v -> finish());
+        btnClear.setOnClickListener(v -> clearResults());
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (scanning) {
+                    cancel.set(true);
+                    return;
+                }
+                if (findingsCard.getVisibility() == View.VISIBLE) {
+                    clearResults();
+                    return;
+                }
+                finish();
+            }
+        });
     }
 
     @Override
@@ -82,16 +108,17 @@ public class MainActivity extends AppCompatActivity {
     private void refreshAccess() {
         boolean ok = hasAllFiles();
         btnAllow.setVisibility(ok ? View.GONE : View.VISIBLE);
-        btnScan.setVisibility(ok ? View.VISIBLE : View.GONE);
-        btnDeep.setVisibility(ok ? View.VISIBLE : View.GONE);
+        btnScan.setVisibility(ok && !scanning ? View.VISIBLE : View.GONE);
+        btnDeep.setVisibility(ok && !scanning ? View.VISIBLE : View.GONE);
+        btnStop.setVisibility(scanning ? View.VISIBLE : View.GONE);
         if (ok) {
             accessTitle.setText("All files access is on");
-            accessCopy.setText("Shared storage can be inspected. Other apps private data still requires root.");
-            status.setText("Native Aegis (build 3). Files stay on this phone.");
+            accessCopy.setText("Shared storage can be inspected. Close app is at the top. Swipe back also leaves.");
+            status.setText("Native Aegis (build 4). Files stay on this phone.");
         } else {
             accessTitle.setText("Aegis needs All files access");
-            accessCopy.setText("Android will open the All files screen. Turn Aegis on, then return here.");
-            status.setText("Build 3 — native screen, no webpage. Grant All files, then scan.");
+            accessCopy.setText("Android opens All files. Turn Aegis on, then swipe back from the left edge.");
+            status.setText("Build 4. Close app is at the top.");
         }
         btnScan.setEnabled(!scanning);
         btnDeep.setEnabled(!scanning);
@@ -113,9 +140,17 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void clearResults() {
+        findings.removeAllViews();
+        findingsCard.setVisibility(View.GONE);
+        bar.setVisibility(View.GONE);
+        progressText.setVisibility(View.GONE);
+    }
+
     private void startScan(boolean deep) {
         if (scanning || !hasAllFiles()) return;
         scanning = true;
+        cancel.set(false);
         findings.removeAllViews();
         findingsCard.setVisibility(View.GONE);
         bar.setVisibility(View.VISIBLE);
@@ -137,6 +172,7 @@ public class MainActivity extends AppCompatActivity {
         List<Hit> hits = new ArrayList<>();
         int n = files.size();
         for (int i = 0; i < n; i++) {
+            if (cancel.get()) break;
             File file = files.get(i);
             final int done = i + 1;
             runOnUiThread(() -> {
@@ -146,18 +182,21 @@ public class MainActivity extends AppCompatActivity {
             Hit hit = inspect(file);
             if (hit != null) hits.add(hit);
         }
-        runOnUiThread(() -> finishScan(n, hits));
+        final boolean stopped = cancel.get();
+        runOnUiThread(() -> finishScan(n, hits, stopped));
     }
 
-    private void finishScan(int n, List<Hit> hits) {
+    private void finishScan(int n, List<Hit> hits, boolean stopped) {
         scanning = false;
         bar.setProgress(100);
-        progressText.setText("Done · " + n + " files");
+        progressText.setText((stopped ? "Stopped · " : "Done · ") + n + " files listed");
         findingsCard.setVisibility(View.VISIBLE);
         if (hits.isEmpty()) {
-            findingsTitle.setText("No matches in allowed storage");
+            findingsTitle.setText(stopped ? "Scan stopped" : "No matches in allowed storage");
             TextView tv = new TextView(this);
-            tv.setText("No EICAR, PE/APK mismatch, or dropper strings in the files Aegis could read.");
+            tv.setText(stopped
+                ? "Stopped early. Clear results or Close app."
+                : "No EICAR, PE/APK mismatch, or dropper strings in the files Aegis could read.");
             tv.setTextColor(getResources().getColor(R.color.ok));
             tv.setPadding(0, 12, 0, 0);
             findings.addView(tv);
@@ -190,6 +229,7 @@ public class MainActivity extends AppCompatActivity {
         ArrayDeque<File> queue = new ArrayDeque<>();
         queue.add(root);
         while (!queue.isEmpty() && out.size() < cap) {
+            if (cancel.get()) break;
             File dir = queue.removeFirst();
             File[] children = dir.listFiles();
             if (children == null) continue;
