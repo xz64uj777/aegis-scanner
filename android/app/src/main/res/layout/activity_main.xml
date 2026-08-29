@@ -36,7 +36,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Build 4 — Close app is always at the top. Swipe back also exits."
+            android:text="Build 5 — apps, Downloads, Documents, sideloads. Boot stays sealed without root."
             android:textColor="@color/muted"
             android:textSize="14sp" />
         <LinearLayout
@@ -59,7 +59,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Android will open the All files screen. Turn Aegis on, then swipe back."
+                android:text="Grant All files, then run a full scan of apps plus shared storage."
                 android:textColor="@color/muted"
                 android:textSize="14sp" />
             <Button
@@ -75,7 +75,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Scan allowed storage"
+                android:text="Scan apps + files"
                 android:visibility="gone" />
             <Button
                 android:id="@+id/btnDeep"
@@ -83,7 +83,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Deep scan"
+                android:text="Deep file scan"
                 android:visibility="gone" />
             <Button
                 android:id="@+id/btnStop"
@@ -124,7 +124,7 @@
                 android:id="@+id/findingsTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Findings"
+                android:text="Report"
                 android:textColor="@color/fg"
                 android:textSize="16sp"
                 android:textStyle="bold" />
