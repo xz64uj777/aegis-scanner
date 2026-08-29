@@ -1,6 +1,9 @@
 package app.aegis.scanner;
 
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -29,26 +32,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends AppCompatActivity {
 
-    private TextView status;
-    private TextView accessTitle;
-    private TextView accessCopy;
-    private TextView progressText;
-    private TextView findingsTitle;
-    private Button btnAllow;
-    private Button btnScan;
-    private Button btnDeep;
-    private Button btnStop;
-    private Button btnClose;
-    private Button btnClear;
+    private TextView status, accessTitle, accessCopy, progressText, findingsTitle;
+    private Button btnAllow, btnScan, btnDeep, btnStop, btnClose, btnClear;
     private ProgressBar bar;
-    private LinearLayout findings;
-    private LinearLayout findingsCard;
+    private LinearLayout findings, findingsCard;
     private boolean scanning = false;
     private final AtomicBoolean cancel = new AtomicBoolean(false);
 
     private static final String[] QUICK_EXT = {
-        "apk", "xapk", "apks", "dex", "exe", "dll", "js", "vbs", "ps1", "bat",
-        "cmd", "hta", "jar", "zip", "7z", "rar", "pdf", "doc", "xls", "msi", "iso"
+        "apk", "xapk", "apks", "apkm", "dex", "exe", "dll", "js", "vbs", "ps1",
+        "bat", "cmd", "hta", "jar", "zip", "7z", "rar", "pdf", "doc", "docx",
+        "xls", "xlsx", "msi", "iso", "sh", "html"
     };
 
     @Override
@@ -76,31 +70,18 @@ public class MainActivity extends AppCompatActivity {
         btnClose.setOnClickListener(v -> finish());
         btnClear.setOnClickListener(v -> clearResults());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override
-            public void handleOnBackPressed() {
-                if (scanning) {
-                    cancel.set(true);
-                    return;
-                }
-                if (findingsCard.getVisibility() == View.VISIBLE) {
-                    clearResults();
-                    return;
-                }
+            @Override public void handleOnBackPressed() {
+                if (scanning) { cancel.set(true); return; }
+                if (findingsCard.getVisibility() == View.VISIBLE) { clearResults(); return; }
                 finish();
             }
         });
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        refreshAccess();
-    }
+    @Override protected void onResume() { super.onResume(); refreshAccess(); }
 
     private boolean hasAllFiles() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            return Environment.isExternalStorageManager();
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return Environment.isExternalStorageManager();
         File root = Environment.getExternalStorageDirectory();
         return root != null && root.canRead();
     }
@@ -112,23 +93,18 @@ public class MainActivity extends AppCompatActivity {
         btnDeep.setVisibility(ok && !scanning ? View.VISIBLE : View.GONE);
         btnStop.setVisibility(scanning ? View.VISIBLE : View.GONE);
         if (ok) {
-            accessTitle.setText("All files access is on");
-            accessCopy.setText("Shared storage can be inspected. Close app is at the top. Swipe back also leaves.");
-            status.setText("Native Aegis (build 4). Files stay on this phone.");
+            accessTitle.setText("Ready to scan");
+            accessCopy.setText("Apps + shared storage (Downloads, Documents, DCIM). Other apps private data and boot need root.");
+            status.setText("Native Aegis (build 5). Nothing is uploaded.");
         } else {
             accessTitle.setText("Aegis needs All files access");
-            accessCopy.setText("Android opens All files. Turn Aegis on, then swipe back from the left edge.");
-            status.setText("Build 4. Close app is at the top.");
+            accessCopy.setText("Turn Aegis on in All files, swipe back, then scan apps and files.");
+            status.setText("Build 5. Close app is at the top.");
         }
-        btnScan.setEnabled(!scanning);
-        btnDeep.setEnabled(!scanning);
     }
 
     private void requestAllFiles() {
-        if (hasAllFiles()) {
-            refreshAccess();
-            return;
-        }
+        if (hasAllFiles()) { refreshAccess(); return; }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
@@ -155,72 +131,162 @@ public class MainActivity extends AppCompatActivity {
         findingsCard.setVisibility(View.GONE);
         bar.setVisibility(View.VISIBLE);
         progressText.setVisibility(View.VISIBLE);
-        bar.setProgress(4);
-        progressText.setText("Listing shared storage…");
+        bar.setProgress(3);
+        progressText.setText("Reviewing installed apps…");
         refreshAccess();
         Executors.newSingleThreadExecutor().execute(() -> runScan(deep));
     }
 
     private void runScan(boolean deep) {
-        File root = Environment.getExternalStorageDirectory();
-        int cap = deep ? 1200 : 400;
-        Set<String> ext = new HashSet<>();
-        if (!deep) {
-            for (String e : QUICK_EXT) ext.add(e);
-        }
-        List<File> files = listFiles(root, cap, ext);
         List<Hit> hits = new ArrayList<>();
+        int apps = 0, sideload = 0;
+        try {
+            PackageManager pm = getPackageManager();
+            List<PackageInfo> pkgs = pm.getInstalledPackages(PackageManager.GET_PERMISSIONS);
+            apps = pkgs.size();
+            int i = 0;
+            for (PackageInfo pkg : pkgs) {
+                if (cancel.get()) break;
+                i++;
+                final int shown = i, total = pkgs.size();
+                runOnUiThread(() -> {
+                    bar.setProgress(Math.round(shown * 35f / Math.max(total, 1)));
+                    progressText.setText("Apps " + shown + " / " + total);
+                });
+                Hit hit = inspectApp(pm, pkg);
+                if (hit != null) {
+                    hits.add(hit);
+                    if (hit.reason.startsWith("Sideloaded")) sideload++;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        File root = Environment.getExternalStorageDirectory();
+        int cap = deep ? 2500 : 800;
+        Set<String> ext = new HashSet<>();
+        if (!deep) for (String e : QUICK_EXT) ext.add(e);
+        List<File> files = listFiles(root, cap, ext);
         int n = files.size();
         for (int i = 0; i < n; i++) {
             if (cancel.get()) break;
             File file = files.get(i);
             final int done = i + 1;
             runOnUiThread(() -> {
-                bar.setProgress(Math.round(done * 100f / Math.max(n, 1)));
-                progressText.setText("Inspecting " + done + " / " + n);
+                bar.setProgress(35 + Math.round(done * 60f / Math.max(n, 1)));
+                progressText.setText("Files " + done + " / " + n);
             });
-            Hit hit = inspect(file);
+            Hit hit = inspectFile(file);
             if (hit != null) hits.add(hit);
         }
+
+        boolean bootReadable = new File("/system/bin").canRead() && new File("/data/data").canRead();
         final boolean stopped = cancel.get();
-        runOnUiThread(() -> finishScan(n, hits, stopped));
+        final int appCount = apps, sideCount = sideload, fileCount = n;
+        final boolean boot = bootReadable;
+        runOnUiThread(() -> finishScan(appCount, sideCount, fileCount, hits, stopped, boot));
     }
 
-    private void finishScan(int n, List<Hit> hits, boolean stopped) {
+    private Hit inspectApp(PackageManager pm, PackageInfo pkg) {
+        if (pkg.applicationInfo == null) return null;
+        if ((pkg.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0) return null;
+        String label;
+        try { label = pm.getApplicationLabel(pkg.applicationInfo).toString(); }
+        catch (Exception e) { label = pkg.packageName; }
+        String installer = installerOf(pm, pkg.packageName);
+        boolean trusted = isTrustedStore(installer);
+        String[] perms = pkg.requestedPermissions;
+        boolean overlay = hasPerm(perms, "android.permission.SYSTEM_ALERT_WINDOW");
+        boolean install = hasPerm(perms, "android.permission.REQUEST_INSTALL_PACKAGES");
+        boolean access = hasPerm(perms, "android.permission.BIND_ACCESSIBILITY_SERVICE")
+            || hasPerm(perms, "android.permission.BIND_DEVICE_ADMIN");
+        if (!trusted && (overlay || install || access)) {
+            return new Hit(label, pkg.packageName, "Sideloaded app with install/overlay/admin rights — review");
+        }
+        if (!trusted) {
+            return new Hit(label, pkg.packageName + " · installer: " + (installer == null ? "unknown" : installer), "Sideloaded — not from Play or Samsung");
+        }
+        if (overlay && install) {
+            return new Hit(label, pkg.packageName, "Play/Samsung app requests overlay + package install");
+        }
+        return null;
+    }
+
+    private String installerOf(PackageManager pm, String pkg) {
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                String src = pm.getInstallSourceInfo(pkg).getInstallingPackageName();
+                if (src != null) return src;
+            }
+            return pm.getInstallerPackageName(pkg);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean isTrustedStore(String installer) {
+        if (installer == null || installer.isEmpty()) return false;
+        return installer.equals("com.android.vending")
+            || installer.equals("com.google.android.packageinstaller")
+            || installer.equals("com.sec.android.app.samsungapps")
+            || installer.equals("com.samsung.android.shortcutbackupservice")
+            || installer.startsWith("com.samsung.")
+            || installer.equals("com.google.android.apps.restore")
+            || installer.equals(getPackageName());
+    }
+
+    private boolean hasPerm(String[] perms, String want) {
+        if (perms == null) return false;
+        for (String p : perms) if (want.equals(p)) return true;
+        return false;
+    }
+
+    private void finishScan(int apps, int sideload, int files, List<Hit> hits, boolean stopped, boolean boot) {
         scanning = false;
         bar.setProgress(100);
-        progressText.setText((stopped ? "Stopped · " : "Done · ") + n + " files listed");
+        progressText.setText((stopped ? "Stopped" : "Done") + " · " + apps + " apps · " + files + " files");
         findingsCard.setVisibility(View.VISIBLE);
+        findingsTitle.setText(hits.isEmpty() ? (stopped ? "Scan stopped" : "Report") : hits.size() + " items to review");
+
+        addNote("Inventory: " + apps + " packages, " + sideload + " sideloaded flags, " + files + " files opened.", false);
+        addNote(boot
+            ? "Boot and /data were readable. Unusual on a stock S24."
+            : "Boot, firmware, and other apps private data are sealed (no root).", false);
+
         if (hits.isEmpty()) {
-            findingsTitle.setText(stopped ? "Scan stopped" : "No matches in allowed storage");
-            TextView tv = new TextView(this);
-            tv.setText(stopped
-                ? "Stopped early. Clear results or Close app."
-                : "No EICAR, PE/APK mismatch, or dropper strings in the files Aegis could read.");
-            tv.setTextColor(getResources().getColor(R.color.ok));
-            tv.setPadding(0, 12, 0, 0);
-            findings.addView(tv);
+            addNote(stopped ? "Stopped early." : "No EICAR, fake APKs, dropper scripts, or high-risk sideloads in what Aegis can read.", false);
         } else {
-            findingsTitle.setText(hits.size() + (hits.size() == 1 ? " finding" : " findings"));
             for (Hit hit : hits) {
-                TextView reason = new TextView(this);
-                reason.setText(hit.reason);
-                reason.setTextColor(getResources().getColor(R.color.danger));
-                reason.setPadding(0, 14, 0, 0);
-                reason.setTextSize(14);
-                TextView name = new TextView(this);
-                name.setText(hit.name);
-                name.setTextColor(Color.parseColor("#E8EAED"));
-                TextView path = new TextView(this);
-                path.setText(hit.path);
-                path.setTextColor(Color.parseColor("#5C6370"));
-                path.setTextSize(12);
-                findings.addView(reason);
-                findings.addView(name);
-                findings.addView(path);
+                addHit(hit);
             }
         }
         refreshAccess();
+    }
+
+    private void addNote(String text, boolean danger) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(getResources().getColor(danger ? R.color.danger : R.color.ok));
+        tv.setPadding(0, 12, 0, 0);
+        tv.setTextSize(14);
+        findings.addView(tv);
+    }
+
+    private void addHit(Hit hit) {
+        TextView reason = new TextView(this);
+        reason.setText(hit.reason);
+        reason.setTextColor(getResources().getColor(R.color.danger));
+        reason.setPadding(0, 14, 0, 0);
+        reason.setTextSize(14);
+        TextView name = new TextView(this);
+        name.setText(hit.name);
+        name.setTextColor(Color.parseColor("#E8EAED"));
+        TextView path = new TextView(this);
+        path.setText(hit.path);
+        path.setTextColor(Color.parseColor("#5C6370"));
+        path.setTextSize(12);
+        findings.addView(reason);
+        findings.addView(name);
+        findings.addView(path);
     }
 
     private List<File> listFiles(File root, int cap, Set<String> extensions) {
@@ -249,7 +315,7 @@ public class MainActivity extends AppCompatActivity {
         return out;
     }
 
-    private Hit inspect(File file) {
+    private Hit inspectFile(File file) {
         byte[] buf = readPrefix(file, 524288);
         if (buf == null) return null;
         String name = file.getName();
@@ -267,8 +333,11 @@ public class MainActivity extends AppCompatActivity {
         if (lower.endsWith(".apk") && !(buf.length >= 2 && buf[0] == 0x50 && buf[1] == 0x4b)) {
             return new Hit(name, file.getAbsolutePath(), "APK without ZIP magic");
         }
-        if (lower.matches(".*\\.(js|vbs|ps1|bat|cmd|hta)$")
-            && (text.contains("eval(") || text.contains("fromcharcode") || text.contains("downloadstring"))) {
+        if (lower.matches(".*\\.(pdf|jpg|png|doc|xls)\\.(exe|apk|js|scr|bat)$")) {
+            return new Hit(name, file.getAbsolutePath(), "Double extension — classic dropper name");
+        }
+        if (lower.matches(".*\\.(js|vbs|ps1|bat|cmd|hta|sh)$")
+            && (text.contains("eval(") || text.contains("fromcharcode") || text.contains("downloadstring") || text.contains("/bin/sh"))) {
             return new Hit(name, file.getAbsolutePath(), "Script dropper patterns");
         }
         return null;
@@ -312,13 +381,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private static class Hit {
-        final String name;
-        final String path;
-        final String reason;
+        final String name, path, reason;
         Hit(String name, String path, String reason) {
-            this.name = name;
-            this.path = path;
-            this.reason = reason;
+            this.name = name; this.path = path; this.reason = reason;
         }
     }
 }
