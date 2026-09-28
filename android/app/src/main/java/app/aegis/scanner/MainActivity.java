@@ -37,6 +37,7 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar bar;
     private LinearLayout findings, findingsCard;
     private boolean scanning = false;
+    private int skippedQuiet = 0;
     private final AtomicBoolean cancel = new AtomicBoolean(false);
 
     private static final String[] QUICK_EXT = {
@@ -94,12 +95,12 @@ public class MainActivity extends AppCompatActivity {
         btnStop.setVisibility(scanning ? View.VISIBLE : View.GONE);
         if (ok) {
             accessTitle.setText("Ready to scan");
-            accessCopy.setText("Apps + shared storage (Downloads, Documents, DCIM). Other apps private data and boot need root.");
-            status.setText("Native Aegis (build 5). Nothing is uploaded.");
+            accessCopy.setText("Review list skips Samsung, Google, and carrier preloads. Files stay on this phone.");
+            status.setText("Native Aegis (build 6). Nothing is uploaded.");
         } else {
             accessTitle.setText("Aegis needs All files access");
             accessCopy.setText("Turn Aegis on in All files, swipe back, then scan apps and files.");
-            status.setText("Build 5. Close app is at the top.");
+            status.setText("Build 6. Close app is at the top.");
         }
     }
 
@@ -127,6 +128,7 @@ public class MainActivity extends AppCompatActivity {
         if (scanning || !hasAllFiles()) return;
         scanning = true;
         cancel.set(false);
+        skippedQuiet = 0;
         findings.removeAllViews();
         findingsCard.setVisibility(View.GONE);
         bar.setVisibility(View.VISIBLE);
@@ -139,7 +141,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void runScan(boolean deep) {
         List<Hit> hits = new ArrayList<>();
-        int apps = 0, sideload = 0;
+        int apps = 0;
         try {
             PackageManager pm = getPackageManager();
             List<PackageInfo> pkgs = pm.getInstalledPackages(PackageManager.GET_PERMISSIONS);
@@ -154,10 +156,7 @@ public class MainActivity extends AppCompatActivity {
                     progressText.setText("Apps " + shown + " / " + total);
                 });
                 Hit hit = inspectApp(pm, pkg);
-                if (hit != null) {
-                    hits.add(hit);
-                    if (hit.reason.startsWith("Sideloaded")) sideload++;
-                }
+                if (hit != null) hits.add(hit);
             }
         } catch (Exception ignored) {}
 
@@ -181,34 +180,58 @@ public class MainActivity extends AppCompatActivity {
 
         boolean bootReadable = new File("/system/bin").canRead() && new File("/data/data").canRead();
         final boolean stopped = cancel.get();
-        final int appCount = apps, sideCount = sideload, fileCount = n;
+        final int appCount = apps, quiet = skippedQuiet, fileCount = n;
         final boolean boot = bootReadable;
-        runOnUiThread(() -> finishScan(appCount, sideCount, fileCount, hits, stopped, boot));
+        runOnUiThread(() -> finishScan(appCount, quiet, fileCount, hits, stopped, boot));
     }
 
     private Hit inspectApp(PackageManager pm, PackageInfo pkg) {
         if (pkg.applicationInfo == null) return null;
-        if ((pkg.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0) return null;
+        int flags = pkg.applicationInfo.flags;
+        if ((flags & ApplicationInfo.FLAG_SYSTEM) != 0 || (flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0) {
+            skippedQuiet++;
+            return null;
+        }
+        String pkgName = pkg.packageName;
+        String installer = installerOf(pm, pkgName);
+        if (isVendorPackage(pkgName) || isQuietInstaller(installer)) {
+            skippedQuiet++;
+            return null;
+        }
+        if (isTrustedStore(installer)) return null;
         String label;
         try { label = pm.getApplicationLabel(pkg.applicationInfo).toString(); }
-        catch (Exception e) { label = pkg.packageName; }
-        String installer = installerOf(pm, pkg.packageName);
-        boolean trusted = isTrustedStore(installer);
+        catch (Exception e) { label = pkgName; }
         String[] perms = pkg.requestedPermissions;
-        boolean overlay = hasPerm(perms, "android.permission.SYSTEM_ALERT_WINDOW");
         boolean install = hasPerm(perms, "android.permission.REQUEST_INSTALL_PACKAGES");
-        boolean access = hasPerm(perms, "android.permission.BIND_ACCESSIBILITY_SERVICE")
-            || hasPerm(perms, "android.permission.BIND_DEVICE_ADMIN");
-        if (!trusted && (overlay || install || access)) {
-            return new Hit(label, pkg.packageName, "Sideloaded app with install/overlay/admin rights — review");
+        boolean admin = hasPerm(perms, "android.permission.BIND_DEVICE_ADMIN");
+        String who = installer == null ? "unknown" : installer;
+        if (install || admin) {
+            return new Hit(label, pkgName + " · installer: " + who, "Unknown source and can install other apps");
         }
-        if (!trusted) {
-            return new Hit(label, pkg.packageName + " · installer: " + (installer == null ? "unknown" : installer), "Sideloaded — not from Play or Samsung");
-        }
-        if (overlay && install) {
-            return new Hit(label, pkg.packageName, "Play/Samsung app requests overlay + package install");
-        }
-        return null;
+        return new Hit(label, pkgName + " · installer: " + who, "Not from Play — uninstall if you didn't add it");
+    }
+
+    private boolean isVendorPackage(String pkg) {
+        return pkg.startsWith("com.samsung.")
+            || pkg.startsWith("com.sec.")
+            || pkg.startsWith("com.google.")
+            || pkg.startsWith("com.android.")
+            || pkg.startsWith("android.")
+            || pkg.startsWith("org.chromium.webapk.")
+            || pkg.startsWith("com.att.")
+            || pkg.startsWith("com.aura.")
+            || pkg.startsWith("com.monotype.");
+    }
+
+    private boolean isQuietInstaller(String installer) {
+        if (installer == null) return false;
+        return installer.equals("com.android.settings")
+            || installer.equals("com.android.chrome")
+            || installer.startsWith("com.aura.")
+            || installer.startsWith("com.samsung.")
+            || installer.startsWith("com.sec.")
+            || installer.startsWith("com.google.");
     }
 
     private String installerOf(PackageManager pm, String pkg) {
@@ -229,7 +252,6 @@ public class MainActivity extends AppCompatActivity {
             || installer.equals("com.google.android.packageinstaller")
             || installer.equals("com.sec.android.app.samsungapps")
             || installer.equals("com.samsung.android.shortcutbackupservice")
-            || installer.startsWith("com.samsung.")
             || installer.equals("com.google.android.apps.restore")
             || installer.equals(getPackageName());
     }
@@ -240,24 +262,20 @@ public class MainActivity extends AppCompatActivity {
         return false;
     }
 
-    private void finishScan(int apps, int sideload, int files, List<Hit> hits, boolean stopped, boolean boot) {
+    private void finishScan(int apps, int quiet, int files, List<Hit> hits, boolean stopped, boolean boot) {
         scanning = false;
         bar.setProgress(100);
         progressText.setText((stopped ? "Stopped" : "Done") + " · " + apps + " apps · " + files + " files");
         findingsCard.setVisibility(View.VISIBLE);
-        findingsTitle.setText(hits.isEmpty() ? (stopped ? "Scan stopped" : "Report") : hits.size() + " items to review");
-
-        addNote("Inventory: " + apps + " packages, " + sideload + " sideloaded flags, " + files + " files opened.", false);
+        findingsTitle.setText(hits.isEmpty() ? (stopped ? "Scan stopped" : "Nothing to uninstall") : hits.size() + " apps you may not have chosen");
+        addNote("Checked " + apps + " apps and " + files + " files. Skipped " + quiet + " Samsung, Google, and carrier preloads.", false);
         addNote(boot
             ? "Boot and /data were readable. Unusual on a stock S24."
-            : "Boot, firmware, and other apps private data are sealed (no root).", false);
-
+            : "Boot and other apps' private data stay sealed without root. A blank installer is not a virus.", false);
         if (hits.isEmpty()) {
-            addNote(stopped ? "Stopped early." : "No EICAR, fake APKs, dropper scripts, or high-risk sideloads in what Aegis can read.", false);
+            addNote(stopped ? "Stopped early." : "No unknown-source apps, EICAR files, fake APKs, or dropper scripts in what Aegis can read.", false);
         } else {
-            for (Hit hit : hits) {
-                addHit(hit);
-            }
+            for (Hit hit : hits) addHit(hit);
         }
         refreshAccess();
     }
