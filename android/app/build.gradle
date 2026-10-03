@@ -7,12 +7,24 @@ android {
         applicationId "app.aegis.scanner"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 6
-        versionName "6.0"
+        versionCode 7
+        versionName "7.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
+    signingConfigs {
+        aegis {
+            storeFile file("aegis-debug.keystore")
+            storePassword "aegisdebug"
+            keyAlias "aegis"
+            keyPassword "aegisdebug"
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.aegis
+        }
         release {
+            signingConfig signingConfigs.aegis
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

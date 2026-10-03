@@ -35,6 +35,7 @@ jobs:
 
       - name: Build debug APK
         run: |
+          base64 -d android/app/aegis-debug.keystore.b64 > android/app/aegis-debug.keystore
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
           echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
           cd android
