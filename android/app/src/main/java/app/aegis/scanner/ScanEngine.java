@@ -49,6 +49,7 @@ public final class ScanEngine {
         public int apps;
         public int files;
         public int skipped;
+        public String bootSummary = "";
         public final List<Finding> hits = new ArrayList<>();
     }
 
@@ -63,6 +64,9 @@ public final class ScanEngine {
     public static Result scan(Context ctx, boolean full, Cancel cancel, Progress progress) {
         Result result = new Result();
         scanApps(ctx, result, cancel, progress);
+        if (cancel.get()) return result;
+        progress.onProgress(38, "Boot");
+        scanBoot(ctx, result);
         if (cancel.get()) return result;
         List<File> roots = full ? fullRoots() : quickRoots();
         Set<String> ext = new HashSet<>();
@@ -79,6 +83,105 @@ public final class ScanEngine {
             progress.onProgress(40 + Math.round(done * 60f / Math.max(n, 1)), "Files " + done + " / " + n);
         }
         return result;
+    }
+
+    private static void scanBoot(Context ctx, Result result) {
+        String verified = prop("ro.boot.verifiedbootstate");
+        String flash = prop("ro.boot.flash.locked");
+        String vbmeta = prop("ro.boot.vbmeta.device_state");
+        String verity = prop("ro.boot.veritymode");
+        String warranty = prop("ro.boot.warranty_bit");
+        if (warranty.isEmpty()) warranty = prop("ro.warranty_bit");
+        boolean unlocked = "orange".equals(verified) || "unlocked".equalsIgnoreCase(vbmeta) || "0".equals(flash);
+        boolean custom = "yellow".equals(verified);
+        if (unlocked) {
+            result.hits.add(new Finding("boot", "Bootloader unlocked", "ro.boot.verifiedbootstate=" + value(verified),
+                "Verified boot is not green. This phone can load a modified boot image.", "critical"));
+        } else if (custom) {
+            result.hits.add(new Finding("boot", "Custom boot key", "ro.boot.verifiedbootstate=yellow",
+                "Boot is signed with a custom key, not the Samsung key.", "high"));
+        }
+        if ("1".equals(warranty)) {
+            result.hits.add(new Finding("boot", "Knox warranty bit tripped", "ro.boot.warranty_bit=1",
+                "Samsung has recorded a boot or firmware modification.", "high"));
+        }
+        if ("disabled".equals(verity) || "eio".equals(verity)) {
+            result.hits.add(new Finding("boot", "dm-verity disabled", "ro.boot.veritymode=" + verity,
+                "Boot integrity checks are not enforcing.", "high"));
+        }
+        if (Build.TAGS != null && Build.TAGS.contains("test-keys")) {
+            result.hits.add(new Finding("boot", "Test-keys build", "android.os.Build.TAGS",
+                "This system image was signed with public test keys.", "high"));
+        }
+        String[] binaries = {
+            "/system/bin/su", "/system/xbin/su", "/sbin/su", "/debug_ramdisk/su",
+            "/system/bin/magisk", "/sbin/.magisk", "/system/xbin/magisk"
+        };
+        for (String path : binaries) {
+            if (new File(path).exists()) {
+                result.hits.add(new Finding("boot", "Root binary", path, "A superuser or Magisk file is on the boot or system path.", "critical"));
+            }
+        }
+        String[] rootPkgs = {
+            "com.topjohnwu.magisk", "eu.chainfire.supersu", "com.koushikdutta.superuser",
+            "me.weishu.kernelsu", "com.noshufou.android.su"
+        };
+        PackageManager pm = ctx.getPackageManager();
+        for (String pkg : rootPkgs) {
+            try {
+                pm.getPackageInfo(pkg, 0);
+                if (!already(result, pkg)) {
+                    result.hits.add(new Finding("app", pkg, pkg, "Root manager installed. It can change boot and system.", "critical"));
+                }
+            } catch (Exception ignored) {}
+        }
+        try {
+            List<PackageInfo> pkgs = pm.getInstalledPackages(PackageManager.GET_PERMISSIONS);
+            for (PackageInfo pkg : pkgs) {
+                if (pkg.applicationInfo == null) continue;
+                if (!has(pkg.requestedPermissions, "android.permission.RECEIVE_BOOT_COMPLETED")) continue;
+                int flags = pkg.applicationInfo.flags;
+                if ((flags & ApplicationInfo.FLAG_SYSTEM) != 0 || (flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0) continue;
+                String name = pkg.packageName;
+                String installer = installerOf(pm, name);
+                if (isVendor(name) || isTrusted(installer) || already(result, name)) continue;
+                String label;
+                try { label = pm.getApplicationLabel(pkg.applicationInfo).toString(); }
+                catch (Exception e) { label = name; }
+                result.hits.add(new Finding("app", label, name,
+                    "Starts when the phone boots and was not installed from Play or Galaxy Store.", "moderate"));
+            }
+        } catch (Exception ignored) {}
+        int sealed = 0;
+        String[] sealedPaths = {"/boot", "/efs", "/data", "/vendor", "/system/bin"};
+        for (String path : sealedPaths) {
+            File file = new File(path);
+            if (!file.exists() || !file.canRead()) sealed++;
+        }
+        String state = verified.isEmpty() ? "hidden" : verified;
+        result.bootSummary = "Verified boot " + state
+            + ". Bootloader " + (unlocked ? "unlocked" : "locked or not reported")
+            + ". Knox bit " + (warranty.isEmpty() ? "hidden" : warranty)
+            + ". " + sealed + " of " + sealedPaths.length + " boot paths are sealed, which is normal without root.";
+    }
+
+    private static boolean already(Result result, String path) {
+        for (Finding hit : result.hits) if (path.equals(hit.path)) return true;
+        return false;
+    }
+
+    private static String prop(String key) {
+        try {
+            Class<?> clazz = Class.forName("android.os.SystemProperties");
+            Object value = clazz.getMethod("get", String.class, String.class).invoke(null, key, "");
+            return value == null ? "" : value.toString().trim().toLowerCase(Locale.US);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static String value(String raw) {
+        return raw == null || raw.isEmpty() ? "hidden" : raw;
     }
 
     public static Finding inspectFile(File file) {

@@ -115,8 +115,8 @@ public class MainActivity extends AppCompatActivity {
         int alerts = Vault.list(this, "alerts").length();
         int held = Vault.list(this, "quarantine").length();
         status.setText(files
-            ? "Build 9. " + held + " in vault. " + alerts + " watch alerts."
-            : "Build 9. All files access is off, so file scan and vault restore are limited.");
+            ? "Build 10. " + held + " in vault. " + alerts + " watch alerts."
+            : "Build 10. All files access is off, so file scan and vault restore are limited.");
         body.removeAllViews();
         if (next == PAGE_HOME) renderHome(files, alerts, held);
         else if (next == PAGE_SCAN) renderScan();
@@ -128,7 +128,7 @@ public class MainActivity extends AppCompatActivity {
         card("Protection", files ? "Shared storage can be scanned." : "Turn on All files access, or Aegis can only see apps.");
         if (!files) body.addView(button("Allow all files", true, v -> requestAllFiles()));
         body.addView(button(Vault.watch(this) ? "Downloads watch is on" : "Watch Downloads", false, v -> toggleWatch()));
-        card("What this scan does", "Apps with spyware permissions. Downloads, Documents, Telegram, and WhatsApp files. APKs, scripts, archives, and ransom notes. Quarantine moves a file off shared storage. Boot and other apps' private data stay sealed without root.");
+        card("What this scan does", "Every scan checks three things: installed apps, shared storage, and boot. Boot means verified boot, Knox, root files, and sideloaded apps that start at startup. The raw boot partition stays sealed without root.");
         body.addView(button("Quick scan", true, v -> startScan(false)));
         body.addView(button("Full shared-storage scan", false, v -> startScan(true)));
         if (alerts > 0) {
@@ -141,7 +141,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void renderScan() {
         if (!scanning) {
-            card("Scan", "Quick checks apps plus Downloads and chat folders. Full walks shared storage, still skipping photos and the sealed Android data folder.");
+            card("Scan", "Quick and full both check apps, files, and boot. Full walks more of shared storage. Photos and sealed Android data are skipped.");
             body.addView(button("Quick scan", true, v -> startScan(false)));
             body.addView(button("Full scan", false, v -> startScan(true)));
         }
@@ -203,7 +203,7 @@ public class MainActivity extends AppCompatActivity {
         ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(100);
         bar.setProgress(2);
-        TextView label = text("Starting\u2026", 14, color(R.color.fg), false);
+        TextView label = text("Starting…", 14, color(R.color.fg), false);
         body.addView(label);
         body.addView(bar);
         body.addView(button("Stop", false, v -> cancel.set(true)));
@@ -223,18 +223,19 @@ public class MainActivity extends AppCompatActivity {
     private void finishScan(ScanEngine.Result result, boolean stopped) {
         scanning = false;
         body.removeAllViews();
-        String headline = (stopped ? "Stopped" : "Done") + " \u00b7 " + result.apps + " apps \u00b7 " + result.files + " files";
+        String headline = (stopped ? "Stopped" : "Done") + " · " + result.apps + " apps · " + result.files + " files · boot";
         card(result.hits.isEmpty() ? (stopped ? "Scan stopped" : "Nothing to act on") : result.hits.size() + " findings",
-            headline + ". Skipped " + result.skipped + " system, Play, and Samsung apps. Private app data and boot partitions stay sealed.");
+            headline + ". Skipped " + result.skipped + " system, Play, and Samsung apps.");
+        if (result.bootSummary != null && !result.bootSummary.isEmpty()) card("Boot", result.bootSummary);
         if (result.hits.isEmpty() && !stopped) {
-            card("Clean for this pass", "No spyware-permission sideload, EICAR file, fake APK, ransom note, or script dropper in the folders Aegis could open.");
+            card("Clean for this pass", "No spyware-permission sideload, boot tamper, EICAR file, fake APK, ransom note, or script dropper in what this phone lets Aegis read.");
         }
         for (ScanEngine.Finding hit : result.hits) addFinding(hit);
     }
 
     private void addFinding(ScanEngine.Finding hit) {
         int tone = "critical".equals(hit.severity) || "high".equals(hit.severity) ? color(R.color.danger) : color(R.color.ok);
-        TextView reason = text(hit.severity.toUpperCase() + " \u00b7 " + hit.detail, 14, tone, false);
+        TextView reason = text(hit.severity.toUpperCase() + " · " + hit.detail, 14, tone, false);
         reason.setPadding(0, dp(14), 0, 0);
         body.addView(reason);
         body.addView(text(hit.title, 16, color(R.color.fg), true));
@@ -244,6 +245,8 @@ public class MainActivity extends AppCompatActivity {
             row.addView(button("Uninstall", true, v -> uninstall(hit.path)), weight());
             row.addView(button("App info", false, v -> openApp(hit.path)), weight());
             body.addView(row);
+        } else if ("boot".equals(hit.kind)) {
+            body.addView(button("Details", false, v -> details(hit)));
         } else {
             LinearLayout row = new LinearLayout(this);
             row.addView(button("Quarantine", true, v -> quarantine(hit)), weight());
