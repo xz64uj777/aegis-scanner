@@ -1,10 +1,10 @@
 package app.aegis.scanner;
 
+import android.Manifest;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,72 +14,339 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Set;
+import java.text.DateFormat;
+import java.util.Date;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends AppCompatActivity {
+    private static final int PAGE_HOME = 0;
+    private static final int PAGE_SCAN = 1;
+    private static final int PAGE_VAULT = 2;
+    private static final int PAGE_HISTORY = 3;
 
-    private TextView status, accessTitle, accessCopy, progressText, findingsTitle;
-    private Button btnAllow, btnScan, btnDeep, btnStop, btnClose, btnClear;
-    private ProgressBar bar;
-    private LinearLayout findings, findingsCard;
-    private boolean scanning = false;
-    private int skippedQuiet = 0;
     private final AtomicBoolean cancel = new AtomicBoolean(false);
+    private boolean scanning;
+    private int page = PAGE_HOME;
+    private LinearLayout body;
+    private Button tabHome, tabScan, tabVault, tabHistory;
+    private TextView status;
 
-    private static final String[] QUICK_EXT = {
-        "apk", "xapk", "apks", "apkm", "dex", "exe", "dll", "js", "vbs", "ps1",
-        "bat", "cmd", "hta", "jar", "zip", "7z", "rar", "pdf", "doc", "docx",
-        "xls", "xlsx", "msi", "iso", "sh", "html"
-    };
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-        status = findViewById(R.id.status);
-        accessTitle = findViewById(R.id.accessTitle);
-        accessCopy = findViewById(R.id.accessCopy);
-        progressText = findViewById(R.id.progressText);
-        findingsTitle = findViewById(R.id.findingsTitle);
-        btnAllow = findViewById(R.id.btnAllow);
-        btnScan = findViewById(R.id.btnScan);
-        btnDeep = findViewById(R.id.btnDeep);
-        btnStop = findViewById(R.id.btnStop);
-        btnClose = findViewById(R.id.btnClose);
-        btnClear = findViewById(R.id.btnClear);
-        bar = findViewById(R.id.bar);
-        findings = findViewById(R.id.findings);
-        findingsCard = findViewById(R.id.findingsCard);
-        btnAllow.setOnClickListener(v -> requestAllFiles());
-        btnScan.setOnClickListener(v -> startScan(false));
-        btnDeep.setOnClickListener(v -> startScan(true));
-        btnStop.setOnClickListener(v -> cancel.set(true));
-        btnClose.setOnClickListener(v -> finish());
-        btnClear.setOnClickListener(v -> clearResults());
+        setContentView(buildShell());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() {
                 if (scanning) { cancel.set(true); return; }
-                if (findingsCard.getVisibility() == View.VISIBLE) { clearResults(); return; }
+                if (page != PAGE_HOME) { show(PAGE_HOME); return; }
                 finish();
             }
         });
+        show(PAGE_HOME);
     }
 
-    @Override protected void onResume() { super.onResume(); refreshAccess(); }
+    @Override protected void onResume() {
+        super.onResume();
+        if (!scanning) show(page);
+    }
+
+    private View buildShell() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(color(R.color.colorPrimaryDark));
+        root.setPadding(dp(16), dp(16), dp(16), dp(8));
+
+        TextView brand = text("AEGIS", 12, color(R.color.muted), false);
+        brand.setLetterSpacing(0.08f);
+        root.addView(brand);
+        TextView title = text("This phone", 26, color(R.color.fg), true);
+        title.setPadding(0, dp(4), 0, 0);
+        root.addView(title);
+        status = text("", 13, color(R.color.muted), false);
+        status.setPadding(0, dp(6), 0, dp(10));
+        root.addView(status);
+
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        tabHome = tab("Home");
+        tabScan = tab("Scan");
+        tabVault = tab("Vault");
+        tabHistory = tab("History");
+        tabHome.setOnClickListener(v -> show(PAGE_HOME));
+        tabScan.setOnClickListener(v -> show(PAGE_SCAN));
+        tabVault.setOnClickListener(v -> show(PAGE_VAULT));
+        tabHistory.setOnClickListener(v -> show(PAGE_HISTORY));
+        tabs.addView(tabHome, weight());
+        tabs.addView(tabScan, weight());
+        tabs.addView(tabVault, weight());
+        tabs.addView(tabHistory, weight());
+        root.addView(tabs);
+
+        ScrollView scroll = new ScrollView(this);
+        body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(0, dp(12), 0, dp(24));
+        scroll.addView(body);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+        return root;
+    }
+
+    private void show(int next) {
+        page = next;
+        paintTab(tabHome, next == PAGE_HOME);
+        paintTab(tabScan, next == PAGE_SCAN);
+        paintTab(tabVault, next == PAGE_VAULT);
+        paintTab(tabHistory, next == PAGE_HISTORY);
+        boolean files = hasAllFiles();
+        int alerts = Vault.list(this, "alerts").length();
+        int held = Vault.list(this, "quarantine").length();
+        status.setText(files
+            ? "Build 9. " + held + " in vault. " + alerts + " watch alerts."
+            : "Build 9. All files access is off, so file scan and vault restore are limited.");
+        body.removeAllViews();
+        if (next == PAGE_HOME) renderHome(files, alerts, held);
+        else if (next == PAGE_SCAN) renderScan();
+        else if (next == PAGE_VAULT) renderVault();
+        else renderHistory();
+    }
+
+    private void renderHome(boolean files, int alerts, int held) {
+        card("Protection", files ? "Shared storage can be scanned." : "Turn on All files access, or Aegis can only see apps.");
+        if (!files) body.addView(button("Allow all files", true, v -> requestAllFiles()));
+        body.addView(button(Vault.watch(this) ? "Downloads watch is on" : "Watch Downloads", false, v -> toggleWatch()));
+        card("What this scan does", "Apps with spyware permissions. Downloads, Documents, Telegram, and WhatsApp files. APKs, scripts, archives, and ransom notes. Quarantine moves a file off shared storage. Boot and other apps' private data stay sealed without root.");
+        body.addView(button("Quick scan", true, v -> startScan(false)));
+        body.addView(button("Full shared-storage scan", false, v -> startScan(true)));
+        if (alerts > 0) {
+            card("Watch alerts", alerts + " new file" + (alerts == 1 ? "" : "s") + " in Downloads.");
+            body.addView(button("Clear alerts", false, v -> { Vault.clearAlerts(this); show(PAGE_HOME); }));
+        }
+        card("Vault", held == 0 ? "Nothing quarantined." : held + " file" + (held == 1 ? "" : "s") + " held on this phone.");
+        body.addView(button("Close app", false, v -> finish()));
+    }
+
+    private void renderScan() {
+        if (!scanning) {
+            card("Scan", "Quick checks apps plus Downloads and chat folders. Full walks shared storage, still skipping photos and the sealed Android data folder.");
+            body.addView(button("Quick scan", true, v -> startScan(false)));
+            body.addView(button("Full scan", false, v -> startScan(true)));
+        }
+    }
+
+    private void renderVault() {
+        JSONArray rows = Vault.list(this, "quarantine");
+        if (rows.length() == 0) {
+            card("Quarantine is empty", "When a scan flags a file, Quarantine copies it into Aegis private storage and deletes the original. Restore puts it back.");
+            return;
+        }
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) continue;
+            String id = row.optString("id");
+            card(row.optString("name"), row.optString("reason") + "\n" + row.optString("original"));
+            LinearLayout rowBtns = new LinearLayout(this);
+            Button restore = button("Restore", true, v -> {
+                try {
+                    Vault.restore(this, id);
+                    toast("Restored");
+                } catch (Exception e) {
+                    toast(e.getMessage() == null ? "Restore failed" : e.getMessage());
+                }
+                show(PAGE_VAULT);
+            });
+            Button delete = button("Delete", false, v -> {
+                Vault.deleteForever(this, id);
+                show(PAGE_VAULT);
+            });
+            rowBtns.addView(restore, weight());
+            rowBtns.addView(delete, weight());
+            body.addView(rowBtns);
+        }
+    }
+
+    private void renderHistory() {
+        JSONArray rows = Vault.list(this, "history");
+        if (rows.length() == 0) {
+            card("No scans yet", "Finished scans, quarantines, and Downloads-watch hits land here.");
+            return;
+        }
+        DateFormat fmt = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT);
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) continue;
+            card(row.optString("title"), fmt.format(new Date(row.optLong("at"))) + "\n" + row.optString("detail"));
+        }
+    }
+
+    private void startScan(boolean full) {
+        if (scanning) return;
+        if (!hasAllFiles()) {
+            toast("Allow all files first, or app results will be the only thing Aegis can see.");
+        }
+        scanning = true;
+        cancel.set(false);
+        show(PAGE_SCAN);
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(2);
+        TextView label = text("Starting\u2026", 14, color(R.color.fg), false);
+        body.addView(label);
+        body.addView(bar);
+        body.addView(button("Stop", false, v -> cancel.set(true)));
+        Executors.newSingleThreadExecutor().execute(() -> {
+            ScanEngine.Result result = ScanEngine.scan(this, full, cancel::get, (pct, text) ->
+                runOnUiThread(() -> {
+                    bar.setProgress(pct);
+                    label.setText(text);
+                }));
+            boolean stopped = cancel.get();
+            Vault.addHistory(this, stopped ? "Scan stopped" : (full ? "Full scan" : "Quick scan"),
+                result.apps + " apps, " + result.files + " files, " + result.hits.size() + " findings");
+            runOnUiThread(() -> finishScan(result, stopped));
+        });
+    }
+
+    private void finishScan(ScanEngine.Result result, boolean stopped) {
+        scanning = false;
+        body.removeAllViews();
+        String headline = (stopped ? "Stopped" : "Done") + " \u00b7 " + result.apps + " apps \u00b7 " + result.files + " files";
+        card(result.hits.isEmpty() ? (stopped ? "Scan stopped" : "Nothing to act on") : result.hits.size() + " findings",
+            headline + ". Skipped " + result.skipped + " system, Play, and Samsung apps. Private app data and boot partitions stay sealed.");
+        if (result.hits.isEmpty() && !stopped) {
+            card("Clean for this pass", "No spyware-permission sideload, EICAR file, fake APK, ransom note, or script dropper in the folders Aegis could open.");
+        }
+        for (ScanEngine.Finding hit : result.hits) addFinding(hit);
+    }
+
+    private void addFinding(ScanEngine.Finding hit) {
+        int tone = "critical".equals(hit.severity) || "high".equals(hit.severity) ? color(R.color.danger) : color(R.color.ok);
+        TextView reason = text(hit.severity.toUpperCase() + " \u00b7 " + hit.detail, 14, tone, false);
+        reason.setPadding(0, dp(14), 0, 0);
+        body.addView(reason);
+        body.addView(text(hit.title, 16, color(R.color.fg), true));
+        body.addView(text(hit.path, 12, color(R.color.muted), false));
+        if ("app".equals(hit.kind)) {
+            LinearLayout row = new LinearLayout(this);
+            row.addView(button("Uninstall", true, v -> uninstall(hit.path)), weight());
+            row.addView(button("App info", false, v -> openApp(hit.path)), weight());
+            body.addView(row);
+        } else {
+            LinearLayout row = new LinearLayout(this);
+            row.addView(button("Quarantine", true, v -> quarantine(hit)), weight());
+            row.addView(button("Details", false, v -> details(hit)), weight());
+            body.addView(row);
+        }
+    }
+
+    private void quarantine(ScanEngine.Finding hit) {
+        File file = new File(hit.path);
+        if (!file.isFile()) { toast("File is already gone"); return; }
+        try {
+            Vault.quarantine(this, file, hit.detail);
+            toast("Moved to vault");
+            show(PAGE_VAULT);
+        } catch (Exception e) {
+            toast(e.getMessage() == null ? "Quarantine failed" : e.getMessage());
+        }
+    }
+
+    private void details(ScanEngine.Finding hit) {
+        File file = new File(hit.path);
+        String extra = file.isFile() ? ("\n\nSize " + file.length() + " bytes") : "\n\nFile is not on disk.";
+        new AlertDialog.Builder(this)
+            .setTitle(hit.title)
+            .setMessage(hit.detail + "\n\n" + hit.path + extra)
+            .setPositiveButton("Close", null)
+            .show();
+    }
+
+    private void uninstall(String pkg) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_DELETE);
+            intent.setData(Uri.parse("package:" + pkg));
+            startActivity(intent);
+        } catch (Exception e) {
+            openApp(pkg);
+        }
+    }
+
+    private void openApp(String pkg) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.fromParts("package", pkg, null));
+            startActivity(intent);
+        } catch (Exception e) {
+            toast("Can't open app settings");
+        }
+    }
+
+    private void toggleWatch() {
+        if (Vault.watch(this)) {
+            Vault.setWatch(this, false);
+            stopService(new Intent(this, WatchService.class));
+            toast("Downloads watch off");
+            show(PAGE_HOME);
+            return;
+        }
+        if (!hasAllFiles()) {
+            toast("Allow all files before watching Downloads");
+            requestAllFiles();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 41);
+            return;
+        }
+        Vault.setWatch(this, true);
+        ContextCompat.startForegroundService(this, new Intent(this, WatchService.class));
+        toast("Watching Downloads");
+        show(PAGE_HOME);
+    }
+
+    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code == 41 && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) toggleWatch();
+        else if (code == 41) toast("Notifications are required for the Downloads watch");
+    }
+
+    private void requestAllFiles() {
+        if (hasAllFiles()) { show(page); return; }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        String pkg = getPackageName();
+        Intent[] attempts = new Intent[] {
+            allFiles(Uri.fromParts("package", pkg, null)),
+            allFiles(Uri.parse("package:" + pkg)),
+            new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+        };
+        for (Intent intent : attempts) {
+            try {
+                startActivity(intent);
+                toast("Turn Aegis on, then come back");
+                return;
+            } catch (Exception ignored) {}
+        }
+        toast("Settings, Apps, Special access, All files access, Aegis");
+    }
+
+    private Intent allFiles(Uri data) {
+        Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+        intent.setData(data);
+        return intent;
+    }
 
     private boolean hasAllFiles() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return Environment.isExternalStorageManager();
@@ -87,321 +354,63 @@ public class MainActivity extends AppCompatActivity {
         return root != null && root.canRead();
     }
 
-    private void refreshAccess() {
-        boolean ok = hasAllFiles();
-        btnAllow.setVisibility(ok ? View.GONE : View.VISIBLE);
-        btnScan.setVisibility(ok && !scanning ? View.VISIBLE : View.GONE);
-        btnDeep.setVisibility(ok && !scanning ? View.VISIBLE : View.GONE);
-        btnStop.setVisibility(scanning ? View.VISIBLE : View.GONE);
-        if (ok) {
-            accessTitle.setText("Ready to scan");
-            accessCopy.setText("Review list skips Samsung, Google, and carrier preloads. Files stay on this phone.");
-            status.setText("Native Aegis (build 6). Nothing is uploaded.");
-        } else {
-            accessTitle.setText("Aegis needs All files access");
-            accessCopy.setText("Turn Aegis on in All files, swipe back, then scan apps and files.");
-            status.setText("Build 6. Close app is at the top.");
-        }
+    private void card(String title, String copy) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackgroundColor(color(R.color.surface));
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(10);
+        card.setLayoutParams(lp);
+        card.addView(text(title, 16, color(R.color.fg), true));
+        TextView bodyText = text(copy, 14, color(R.color.muted), false);
+        bodyText.setPadding(0, dp(6), 0, 0);
+        card.addView(bodyText);
+        body.addView(card);
     }
 
-    private void requestAllFiles() {
-        if (hasAllFiles()) { refreshAccess(); return; }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
-                intent.setData(Uri.parse("package:" + getPackageName()));
-                startActivity(intent);
-            } catch (Exception e) {
-                startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
-            }
-        }
+    private Button button(String label, boolean primary, View.OnClickListener click) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextColor(primary ? Color.parseColor("#041018") : color(R.color.fg));
+        button.setBackgroundColor(primary ? color(R.color.colorPrimary) : color(R.color.surface));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(8);
+        lp.leftMargin = dp(4);
+        lp.rightMargin = dp(4);
+        button.setLayoutParams(lp);
+        button.setOnClickListener(click);
+        return button;
     }
 
-    private void clearResults() {
-        findings.removeAllViews();
-        findingsCard.setVisibility(View.GONE);
-        bar.setVisibility(View.GONE);
-        progressText.setVisibility(View.GONE);
+    private Button tab(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextSize(13);
+        return button;
     }
 
-    private void startScan(boolean deep) {
-        if (scanning || !hasAllFiles()) return;
-        scanning = true;
-        cancel.set(false);
-        skippedQuiet = 0;
-        findings.removeAllViews();
-        findingsCard.setVisibility(View.GONE);
-        bar.setVisibility(View.VISIBLE);
-        progressText.setVisibility(View.VISIBLE);
-        bar.setProgress(3);
-        progressText.setText("Reviewing installed apps…");
-        refreshAccess();
-        Executors.newSingleThreadExecutor().execute(() -> runScan(deep));
+    private void paintTab(Button button, boolean on) {
+        button.setTextColor(on ? Color.parseColor("#041018") : color(R.color.fg));
+        button.setBackgroundColor(on ? color(R.color.colorPrimary) : color(R.color.surface));
     }
 
-    private void runScan(boolean deep) {
-        List<Hit> hits = new ArrayList<>();
-        int apps = 0;
-        try {
-            PackageManager pm = getPackageManager();
-            List<PackageInfo> pkgs = pm.getInstalledPackages(PackageManager.GET_PERMISSIONS);
-            apps = pkgs.size();
-            int i = 0;
-            for (PackageInfo pkg : pkgs) {
-                if (cancel.get()) break;
-                i++;
-                final int shown = i, total = pkgs.size();
-                runOnUiThread(() -> {
-                    bar.setProgress(Math.round(shown * 35f / Math.max(total, 1)));
-                    progressText.setText("Apps " + shown + " / " + total);
-                });
-                Hit hit = inspectApp(pm, pkg);
-                if (hit != null) hits.add(hit);
-            }
-        } catch (Exception ignored) {}
-
-        File root = Environment.getExternalStorageDirectory();
-        int cap = deep ? 2500 : 800;
-        Set<String> ext = new HashSet<>();
-        if (!deep) for (String e : QUICK_EXT) ext.add(e);
-        List<File> files = listFiles(root, cap, ext);
-        int n = files.size();
-        for (int i = 0; i < n; i++) {
-            if (cancel.get()) break;
-            File file = files.get(i);
-            final int done = i + 1;
-            runOnUiThread(() -> {
-                bar.setProgress(35 + Math.round(done * 60f / Math.max(n, 1)));
-                progressText.setText("Files " + done + " / " + n);
-            });
-            Hit hit = inspectFile(file);
-            if (hit != null) hits.add(hit);
-        }
-
-        boolean bootReadable = new File("/system/bin").canRead() && new File("/data/data").canRead();
-        final boolean stopped = cancel.get();
-        final int appCount = apps, quiet = skippedQuiet, fileCount = n;
-        final boolean boot = bootReadable;
-        runOnUiThread(() -> finishScan(appCount, quiet, fileCount, hits, stopped, boot));
+    private TextView text(String value, int sp, int color, boolean bold) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(sp);
+        view.setTextColor(color);
+        if (bold) view.setTypeface(Typeface.DEFAULT_BOLD);
+        return view;
     }
 
-    private Hit inspectApp(PackageManager pm, PackageInfo pkg) {
-        if (pkg.applicationInfo == null) return null;
-        int flags = pkg.applicationInfo.flags;
-        if ((flags & ApplicationInfo.FLAG_SYSTEM) != 0 || (flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0) {
-            skippedQuiet++;
-            return null;
-        }
-        String pkgName = pkg.packageName;
-        String installer = installerOf(pm, pkgName);
-        if (isVendorPackage(pkgName) || isQuietInstaller(installer)) {
-            skippedQuiet++;
-            return null;
-        }
-        if (isTrustedStore(installer)) return null;
-        String label;
-        try { label = pm.getApplicationLabel(pkg.applicationInfo).toString(); }
-        catch (Exception e) { label = pkgName; }
-        String[] perms = pkg.requestedPermissions;
-        boolean install = hasPerm(perms, "android.permission.REQUEST_INSTALL_PACKAGES");
-        boolean admin = hasPerm(perms, "android.permission.BIND_DEVICE_ADMIN");
-        String who = installer == null ? "unknown" : installer;
-        if (install || admin) {
-            return new Hit(label, pkgName + " · installer: " + who, "Unknown source and can install other apps");
-        }
-        return new Hit(label, pkgName + " · installer: " + who, "Not from Play — uninstall if you didn't add it");
+    private LinearLayout.LayoutParams weight() {
+        return new LinearLayout.LayoutParams(0, -2, 1f);
     }
 
-    private boolean isVendorPackage(String pkg) {
-        return pkg.startsWith("com.samsung.")
-            || pkg.startsWith("com.sec.")
-            || pkg.startsWith("com.google.")
-            || pkg.startsWith("com.android.")
-            || pkg.startsWith("android.")
-            || pkg.startsWith("org.chromium.webapk.")
-            || pkg.startsWith("com.att.")
-            || pkg.startsWith("com.aura.")
-            || pkg.startsWith("com.monotype.");
-    }
-
-    private boolean isQuietInstaller(String installer) {
-        if (installer == null) return false;
-        return installer.equals("com.android.settings")
-            || installer.equals("com.android.chrome")
-            || installer.startsWith("com.aura.")
-            || installer.startsWith("com.samsung.")
-            || installer.startsWith("com.sec.")
-            || installer.startsWith("com.google.");
-    }
-
-    private String installerOf(PackageManager pm, String pkg) {
-        try {
-            if (Build.VERSION.SDK_INT >= 30) {
-                String src = pm.getInstallSourceInfo(pkg).getInstallingPackageName();
-                if (src != null) return src;
-            }
-            return pm.getInstallerPackageName(pkg);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private boolean isTrustedStore(String installer) {
-        if (installer == null || installer.isEmpty()) return false;
-        return installer.equals("com.android.vending")
-            || installer.equals("com.google.android.packageinstaller")
-            || installer.equals("com.sec.android.app.samsungapps")
-            || installer.equals("com.samsung.android.shortcutbackupservice")
-            || installer.equals("com.google.android.apps.restore")
-            || installer.equals(getPackageName());
-    }
-
-    private boolean hasPerm(String[] perms, String want) {
-        if (perms == null) return false;
-        for (String p : perms) if (want.equals(p)) return true;
-        return false;
-    }
-
-    private void finishScan(int apps, int quiet, int files, List<Hit> hits, boolean stopped, boolean boot) {
-        scanning = false;
-        bar.setProgress(100);
-        progressText.setText((stopped ? "Stopped" : "Done") + " · " + apps + " apps · " + files + " files");
-        findingsCard.setVisibility(View.VISIBLE);
-        findingsTitle.setText(hits.isEmpty() ? (stopped ? "Scan stopped" : "Nothing to uninstall") : hits.size() + " apps you may not have chosen");
-        addNote("Checked " + apps + " apps and " + files + " files. Skipped " + quiet + " Samsung, Google, and carrier preloads.", false);
-        addNote(boot
-            ? "Boot and /data were readable. Unusual on a stock S24."
-            : "Boot and other apps' private data stay sealed without root. A blank installer is not a virus.", false);
-        if (hits.isEmpty()) {
-            addNote(stopped ? "Stopped early." : "No unknown-source apps, EICAR files, fake APKs, or dropper scripts in what Aegis can read.", false);
-        } else {
-            for (Hit hit : hits) addHit(hit);
-        }
-        refreshAccess();
-    }
-
-    private void addNote(String text, boolean danger) {
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextColor(getResources().getColor(danger ? R.color.danger : R.color.ok));
-        tv.setPadding(0, 12, 0, 0);
-        tv.setTextSize(14);
-        findings.addView(tv);
-    }
-
-    private void addHit(Hit hit) {
-        TextView reason = new TextView(this);
-        reason.setText(hit.reason);
-        reason.setTextColor(getResources().getColor(R.color.danger));
-        reason.setPadding(0, 14, 0, 0);
-        reason.setTextSize(14);
-        TextView name = new TextView(this);
-        name.setText(hit.name);
-        name.setTextColor(Color.parseColor("#E8EAED"));
-        TextView path = new TextView(this);
-        path.setText(hit.path);
-        path.setTextColor(Color.parseColor("#5C6370"));
-        path.setTextSize(12);
-        findings.addView(reason);
-        findings.addView(name);
-        findings.addView(path);
-    }
-
-    private List<File> listFiles(File root, int cap, Set<String> extensions) {
-        List<File> out = new ArrayList<>();
-        if (root == null || !root.exists()) return out;
-        ArrayDeque<File> queue = new ArrayDeque<>();
-        queue.add(root);
-        while (!queue.isEmpty() && out.size() < cap) {
-            if (cancel.get()) break;
-            File dir = queue.removeFirst();
-            File[] children = dir.listFiles();
-            if (children == null) continue;
-            for (File child : children) {
-                if (out.size() >= cap) break;
-                String name = child.getName();
-                if (name.startsWith(".") && !name.equals(".nomedia")) continue;
-                if (child.isDirectory()) {
-                    if (skipDir(name)) continue;
-                    queue.addLast(child);
-                } else if (child.isFile()) {
-                    if (!extensions.isEmpty() && !extensions.contains(extOf(name))) continue;
-                    out.add(child);
-                }
-            }
-        }
-        return out;
-    }
-
-    private Hit inspectFile(File file) {
-        byte[] buf = readPrefix(file, 524288);
-        if (buf == null) return null;
-        String name = file.getName();
-        String lower = name.toLowerCase(Locale.US);
-        String text = asciiSample(buf);
-        if (text.contains("eicar-standard-antivirus-test-file") || text.contains("x5o!p%@ap[4\\pzx54(p^)7cc)7}$eicar")) {
-            return new Hit(name, file.getAbsolutePath(), "EICAR test signature");
-        }
-        if (text.contains("powershell -enc") || text.contains("frombase64string") || text.contains("wscript.shell")) {
-            return new Hit(name, file.getAbsolutePath(), "Suspicious command string");
-        }
-        if (buf.length >= 2 && buf[0] == 0x4d && buf[1] == 0x5a && lower.endsWith(".apk")) {
-            return new Hit(name, file.getAbsolutePath(), "Windows PE bytes inside an APK name");
-        }
-        if (lower.endsWith(".apk") && !(buf.length >= 2 && buf[0] == 0x50 && buf[1] == 0x4b)) {
-            return new Hit(name, file.getAbsolutePath(), "APK without ZIP magic");
-        }
-        if (lower.matches(".*\\.(pdf|jpg|png|doc|xls)\\.(exe|apk|js|scr|bat)$")) {
-            return new Hit(name, file.getAbsolutePath(), "Double extension — classic dropper name");
-        }
-        if (lower.matches(".*\\.(js|vbs|ps1|bat|cmd|hta|sh)$")
-            && (text.contains("eval(") || text.contains("fromcharcode") || text.contains("downloadstring") || text.contains("/bin/sh"))) {
-            return new Hit(name, file.getAbsolutePath(), "Script dropper patterns");
-        }
-        return null;
-    }
-
-    private byte[] readPrefix(File file, int max) {
-        try (FileInputStream in = new FileInputStream(file)) {
-            int toRead = (int) Math.min(file.length(), Math.max(1, max));
-            byte[] buf = new byte[toRead];
-            int n = in.read(buf);
-            if (n < 0) return new byte[0];
-            if (n == buf.length) return buf;
-            byte[] cut = new byte[n];
-            System.arraycopy(buf, 0, cut, 0, n);
-            return cut;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private String asciiSample(byte[] bytes) {
-        StringBuilder sb = new StringBuilder(Math.min(bytes.length, 65536));
-        int n = Math.min(bytes.length, 65536);
-        for (int i = 0; i < n; i++) {
-            int c = bytes[i] & 0xff;
-            sb.append(c >= 32 && c < 127 ? (char) c : ' ');
-        }
-        return sb.toString().toLowerCase(Locale.US);
-    }
-
-    private boolean skipDir(String name) {
-        String n = name.toLowerCase(Locale.US);
-        return n.equals("android") || n.equals("cache") || n.equals(".thumbnails")
-            || n.equals("lost.dir") || n.equals("lost+found");
-    }
-
-    private String extOf(String name) {
-        int i = name.lastIndexOf('.');
-        if (i < 0 || i == name.length() - 1) return "";
-        return name.substring(i + 1).toLowerCase(Locale.US);
-    }
-
-    private static class Hit {
-        final String name, path, reason;
-        Hit(String name, String path, String reason) {
-            this.name = name; this.path = path; this.reason = reason;
-        }
-    }
+    private int color(int id) { return getResources().getColor(id); }
+    private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
+    private void toast(String msg) { Toast.makeText(this, msg, Toast.LENGTH_LONG).show(); }
 }
